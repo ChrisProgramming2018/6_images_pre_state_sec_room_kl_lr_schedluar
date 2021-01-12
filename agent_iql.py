@@ -384,7 +384,8 @@ class Agent():
         q_error = 0
         r_error = 0
         error = True
-        used_elements = 0
+        used_elements_r = 0
+        used_elements_q = 0
         for i in range(test_elements):
             states = memory.obses[i]
             actions = memory.actions[i]
@@ -402,16 +403,18 @@ class Agent():
                 soft_q = F.softmax(q_values, dim=1).to("cpu")
                 kl_q =  F.kl_div(soft_q.log(), one_hot, None, None, 'sum')
                 kl_r =  F.kl_div(soft_r.log(), one_hot, None, None, 'sum')
-                if kl_r == float("inf") or kl_q == float("inf"):
-                    continue
-                used_elements += 1
-                r_error += kl_r
-                q_error += kl_q
-        average_q_kl = q_error / test_elements 
-        average_r_kl = r_error / test_elements
-        text = "Kl div of Q_values {} of {} elements".format(average_q_kl, used_elements)
+                if kl_r != float("inf"):
+                    used_elements_r += 1
+                    r_error += kl_r
+                
+                if kl_q != float("inf"):
+                    used_elements_q += 1
+                    q_error += kl_q
+        average_q_kl = q_error / used_elements_q 
+        average_r_kl = r_error / used_elements_r
+        text = "Kl div of Q_values {} of {} elements".format(average_q_kl, used_elements_q)
         print(text)
-        text = "Kl div of R_values {} of {} elements".format(average_r_kl, used_elements)
+        text = "Kl div of R_values {} of {} elements".format(average_r_kl, used_elements_r)
         print(text)
         self.writer.add_scalar('KL_reward', average_r_kl, self.steps)
         self.writer.add_scalar('KL_q_values', average_q_kl, self.steps)

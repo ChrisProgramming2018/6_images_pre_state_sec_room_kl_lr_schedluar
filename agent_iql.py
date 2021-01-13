@@ -105,21 +105,23 @@ class Agent():
         states = states.type(torch.float32).div_(255)
         states = self.encoder.create_vector(states) #.detach()
         self.state_action_frq(states, actions)
-        states, next_states, actions = memory_ex.expert_policy(self.batch_size)
+        states, next_states, actions = memory_ex.sample(self.qnetwork_local, self.encoder)
         states = states.type(torch.float32).div_(255)
         states = self.encoder.create_vector(states)
         actions = torch.randint(0, 8, (self.batch_size,), dtype=torch.int64, device=self.device).unsqueeze(1)
         next_states = next_states.type(torch.float32).div_(255)
         next_states = self.encoder.create_vector(next_states)
+        # print(next_states.shape)
         self.compute_shift_function(states.detach(), next_states, actions)
         self.compute_r_function(states.detach(), actions)
         self.compute_q_function(states.detach(), next_states, actions)
         self.soft_update(self.R_local, self.R_target, self.tau)
         self.soft_update(self.q_shift_local, self.q_shift_target, self.tau)
         self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
-        self.scheduler_q.step()
-        self.scheduler_q_shift.step()
-        self.scheduler_r.step()
+        if self.steps % 3 == 0:
+            self.scheduler_q.step()
+            self.scheduler_q_shift.step()
+            self.scheduler_r.step()
         return
             
     
@@ -387,7 +389,7 @@ class Agent():
         error = True
         used_elements_r = 0
         used_elements_q = 0
-        for i in range(test_elements):
+        for i in range(100):
             states = memory.obses[i]
             actions = memory.actions[i]
             states = torch.as_tensor(states, device=self.device).unsqueeze(0)
@@ -398,26 +400,28 @@ class Agent():
             one_hot = torch.Tensor([0 for i in range(self.action_size)], device="cpu")
             one_hot[actions.item()] = 1
             with torch.no_grad():
-                r_values = self.R_local(states.detach()).detach()
+                #r_values = self.R_local(states.detach()).detach()
                 q_values = self.qnetwork_local(states.detach()).detach()
-                soft_r = F.softmax(r_values, dim=1).to("cpu")
+                #soft_r = F.softmax(r_values, dim=1).to("cpu")
                 soft_q = F.softmax(q_values, dim=1).to("cpu")
                 kl_q =  F.kl_div(soft_q.log(), one_hot, None, None, 'sum')
+                if kl_q != float("inf"):
+                    used_elements_q += 1
+                    q_error += kl_q
+                """
                 kl_r =  F.kl_div(soft_r.log(), one_hot, None, None, 'sum')
                 if kl_r != float("inf"):
                     used_elements_r += 1
                     r_error += kl_r
                 
-                if kl_q != float("inf"):
-                    used_elements_q += 1
-                    q_error += kl_q
-        average_q_kl = q_error / used_elements_q 
         average_r_kl = r_error / used_elements_r
-        text = "Kl div of Q_values {} of {} elements".format(average_q_kl, used_elements_q)
-        print(text)
         text = "Kl div of R_values {} of {} elements".format(average_r_kl, used_elements_r)
         print(text)
         self.writer.add_scalar('KL_reward', average_r_kl, self.steps)
+        """
+        average_q_kl = q_error / used_elements_q 
+        text = "Kl div of Q_values {} of {} elements".format(average_q_kl, used_elements_q)
+        print(text)
         self.writer.add_scalar('KL_q_values', average_q_kl, self.steps)
 
 
@@ -445,7 +449,7 @@ class Agent():
         if recorde:
             eval_episodes=1
             env = gym.wrappers.Monitor(env, self.path + "/vid/{}".format(steps), video_callable=lambda episode_id: True,force=True)
-        max_t = 10000
+        max_t = 500
         scores_window = []
         for i_episode in range(eval_episodes):
             episode_reward = 0

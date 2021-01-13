@@ -1,0 +1,1 @@
+Run 1  best r 0 at 0 | best q 0 at 0  time (1.0, 43.0, 36.79)

@@ -54,6 +54,6 @@ if __name__ == "__main__":
     parser.add_argument('--history_length', default=6, type=int)
     parser.add_argument('--device', default="cuda", type=str)
     parser.add_argument('--limit_data', default=False, type=bool)
-    parser.add_argument('--eval', default=1000, type=int)
+    parser.add_argument('--eval', default=500, type=int)
     arg = parser.parse_args()
     main(arg)

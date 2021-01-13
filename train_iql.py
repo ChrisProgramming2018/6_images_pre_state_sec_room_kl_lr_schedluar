@@ -32,7 +32,7 @@ def train(env, args, config):
         agent.fit_q(args, config)
         return
     t0 = time.time()
-    memory = ReplayBuffer((6, config["size"], config["size"]), (1,), config["buffer_size"], config["image_pad"], config["device"])
+    memory = ReplayBuffer((6, config["size"], config["size"]), (1,), 8, config["buffer_size"], config["batch_size"], config["image_pad"], config["device"])
     memory.load_memory(data_path + config["buffer_path"])
     print("memory idx ",memory.idx)  
     # agent.load("models-28_11_2020_22:25:27/27000-")
@@ -57,16 +57,16 @@ def train(env, args, config):
         text = "Train Predicter {}  \ {}  time {}  \r".format(t, config["predicter_time_steps"], time_format(time.time() - t0))
         print(text, end = '')
         agent.learn(memory)
-        if t % int(config["eval"]) == 0:
+        if t % int(config["eval"]) == 0 and t > 150:
             lr_q = agent.optimizer.param_groups[0]['lr']
             lr_q_sh = agent.optimizer_shift.param_groups[0]['lr']
             lr_r = agent.optimizer_r.param_groups[0]['lr']
             text = "Learning Rate  q {}  \ shift {}  r {} ".format(lr_q, lr_q_sh, lr_r)
             print(text, end = '')
             agent.eval_policy(t, args, False, True)
-            agent.eval_policy(t, args, False, False)
+            #agent.eval_policy(t, args, False, False)
             agent.save(model_path + "/{}-".format(t))
-            agent.test_predicter(memory)
+            #agent.test_predicter(memory)
             agent.test_q_value(memory)
 
 

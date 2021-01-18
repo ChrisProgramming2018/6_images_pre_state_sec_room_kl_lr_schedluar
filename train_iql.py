@@ -23,7 +23,7 @@ def train(env, args, config):
     """
 
     """
-    data_path = "../../data/"
+    data_path = "../data/"
     # now = datetime.now()
     # dt_string = now.strftime("%d_%m_%Y_%H:%M:%S")
     if args.mode == "finetune":
@@ -53,18 +53,20 @@ def train(env, args, config):
 
     #print("memory_expert idx ",memory_t.idx)
     model_path = str(config['locexp']) + "/models"
-    for t in range(config["predicter_time_steps"]):
+    for t in range(1, config["predicter_time_steps"]):
         text = "Train Predicter {}  \ {}  time {}  \r".format(t, config["predicter_time_steps"], time_format(time.time() - t0))
         print(text, end = '')
         agent.learn(memory)
-        if t % int(config["eval"]) == 0 and t > 150:
+        if t % int(config["eval"]) == 0:
             lr_q = agent.optimizer.param_groups[0]['lr']
             lr_q_sh = agent.optimizer_shift.param_groups[0]['lr']
             lr_r = agent.optimizer_r.param_groups[0]['lr']
             text = "Learning Rate  q {}  \ shift {}  r {} ".format(lr_q, lr_q_sh, lr_r)
             print(text, end = '')
             agent.eval_policy(t, args, False, True)
-            #agent.eval_policy(t, args, False, False)
+            agent.eval_policy(t, args, False, True)
+            agent.eval_policy(t, args, False, True)
+            agent.eval_policy(t, args, False, False)
             agent.save(model_path + "/{}-".format(t))
             #agent.test_predicter(memory)
             agent.test_q_value(memory)

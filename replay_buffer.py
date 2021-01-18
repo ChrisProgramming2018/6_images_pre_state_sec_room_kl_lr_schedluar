@@ -1,5 +1,6 @@
 import os
 import sys
+import kornia
 import numpy as np
 import torch
 import torch.nn as nn
@@ -20,8 +21,13 @@ class ReplayBuffer(object):
         self.idx = 0
         self.full = False
         self.k = 0
-        self.kl_threshold = 0.1
-
+        self.kl_threshold = 2
+        self.change_last_time = 0
+        self.last_idx = 0
+        self.current_idx = 0
+        self.change = False
+        self.min_left = 5000
+    
     def __len__(self):
         return self.capacity if self.full else self.idx
 
@@ -38,16 +44,20 @@ class ReplayBuffer(object):
         self.full = self.full or self.idx == 0
 
 
-    def sample(self, qnetwork_local, encoder):
+    def sample(self, qnetwork_local, encoder, writer, steps):
+        decrease_lr = False
         idxs = []
         final_idxs = []
-        # get idx only for kl bigger than 1
-        if len(self.possible_idx) < 200:
-            print("set")
-            self.possible_idx = self.save_pos_idx
-            self.kl_threshold -= 0.01
+        self.last_idx = len(self.possible_idx)
         batch_size = self.batch_size
+        counter = 0
         while True:
+            if len(self.possible_idx) < self.min_left:
+                self.kl_threshold -= 0.2
+                decrease_lr = True
+                self.kl_threshold = max(self.kl_threshold, 0.1)
+                self.possible_idx = [i for i in range(self.idx)]
+            
             idxs = np.random.choice(self.possible_idx, batch_size, replace=False)
             for i in idxs:
                 states = torch.as_tensor(self.obses[i], device=self.device)
@@ -61,6 +71,8 @@ class ReplayBuffer(object):
                     q_values = qnetwork_local(states.detach()).detach()
                     soft_q = F.softmax(q_values, dim=1).to("cpu")
                     kl_q =  F.kl_div(soft_q.log(), one_hot, None, None, 'sum')
+                    # print(len(self.possible_idx))
+                    #print(kl_q, self.kl_threshold)
                     if kl_q >= self.kl_threshold:
                         final_idxs.append(i)
                     else:
@@ -69,14 +81,33 @@ class ReplayBuffer(object):
             batch_size = self.batch_size - len(final_idxs)
             if batch_size <= 0:
                 break
+        
+        
+        self.current_idx = len(self.possible_idx)
+        
+        if self.last_idx == self.current_idx:
+            self.change_last_time += 1
+        else:
+            self.change_last_time = 0
+
+        if self.change_last_time >= 10:
+            self.possible_idx = [i for i in range(self.idx)]
+            self.change_last_time = 0
+            decrease_lr = True
+        
+
+        
         idxs = final_idxs
-        print(len(self.possible_idx))
+        idex_left = len(self.possible_idx)
+        writer.add_scalar('Idx_left', idex_left, steps)
+        writer.add_scalar('kl_threshold', self.kl_threshold, steps)
+        writer.add_scalar('min_self', self.min_left, steps)
         obses = self.obses[idxs]
         next_obses = self.next_obses[idxs]
         obses = torch.as_tensor(obses, device=self.device)
         next_obses = torch.as_tensor(next_obses, device=self.device)
         actions = torch.as_tensor(self.actions[idxs], device=self.device)
-        return obses, next_obses, actions
+        return obses, next_obses, actions, decrease_lr
 
 
     def expert_policy(self, batch_size):
@@ -88,11 +119,7 @@ class ReplayBuffer(object):
         obses = torch.as_tensor(obses, device=self.device)
         next_obses = torch.as_tensor(next_obses, device=self.device)
         actions = torch.as_tensor(self.actions[idxs], device=self.device)
-        obses = obses.type(torch.float32)
-        next_obses = next_obses.type(torch.float32)
  
-        #obses = self.aug_trans(obses)
-        #next_obses = self.aug_trans(next_obses)
         
         return obses, next_obses, actions
 
@@ -146,4 +173,6 @@ class ReplayBuffer(object):
         with open(filename + '/index.txt', 'r') as f:
             self.idx = int(f.read())
         self.possible_idx = [i for i in range(self.idx)]
+        self.last_idx = len(self.possible_idx)
+        self.current_idx = len(self.possible_idx)
         self.save_pos_idx = copy.deepcopy(self.possible_idx)

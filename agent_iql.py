@@ -45,28 +45,27 @@ class Agent():
         print("self tau", self.tau)
         self.gamma = 0.99
         self.fc1 = config["fc1_units"]
-        self.fc2 = config["fc2_units"]
-        self.qnetwork_local = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
-        self.qnetwork_target = QNetwork(state_size, action_size,self.fc1, self.fc2, self.seed).to(self.device)
+        self.qnetwork_local = QNetwork(state_size, action_size, self.fc1, self.seed).to(self.device)
+        self.qnetwork_target = QNetwork(state_size, action_size,self.fc1, self.seed).to(self.device)
         self.optimizer = optim.Adam(self.qnetwork_local.parameters(), lr=self.lr)
         self.soft_update(self.qnetwork_local, self.qnetwork_target, 1)
         self.path = str(config["locexp"]) 
-        self.q_shift_local = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
-        self.q_shift_target = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
+        self.q_shift_local = QNetwork(state_size, action_size, self.fc1, self.seed).to(self.device)
+        self.q_shift_target = QNetwork(state_size, action_size, self.fc1, self.seed).to(self.device)
         self.optimizer_shift = optim.Adam(self.q_shift_local.parameters(), lr=self.lr)
         self.soft_update(self.q_shift_local, self.q_shift_target, 1)
-        self.R_local = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
-        self.R_target = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
+        self.R_local = QNetwork(state_size, action_size, self.fc1, self.seed).to(self.device)
+        self.R_target = QNetwork(state_size, action_size, self.fc1, self.seed).to(self.device)
         self.optimizer_r = optim.Adam(self.R_local.parameters(), lr=self.lr)
         self.soft_update(self.R_local, self.R_target, 1)
         self.steps = 0
-        self.predicter = QNetwork(state_size, action_size, self.fc1, self.fc2, self.seed).to(self.device)
+        self.predicter = Classifier(state_size, action_size, self.seed).to(self.device)
         self.optimizer_pre = optim.Adam(self.predicter.parameters(), lr=self.lr_pre)
         self.encoder = Encoder(config).to(self.device)
         self.encoder_optimizer = torch.optim.Adam(self.encoder.parameters(), self.lr)
         self.encoder_dqn = Encoder(config).to(self.device)
         self.encoder_dqn_optimizer = torch.optim.Adam(self.encoder_dqn.parameters(), self.lr)
-        pathname = "lr_{}_batch_size_{}_fc1_{}_fc2_{}_seed_{}".format(self.lr, self.batch_size, self.fc1, self.fc2, self.seed)
+        pathname = "lr_{}_batch_size_{}_fc1_{}_clip{}_seed_{}".format(self.lr, self.batch_size, self.fc1, self.clip, self.seed)
         pathname += "_clip_{}".format(config["clip"])
         pathname += "_tau_{}".format(config["tau"])
         now = datetime.now()    
@@ -86,7 +85,7 @@ class Agent():
         self.best_r_step = 0
         self.best_q_step = 0
         self.steps = 0
-        self.step_size = 1000
+        self.step_size = 1
         self.scheduler_q = StepLR(self.optimizer, step_size=self.step_size, gamma=0.9)
         self.scheduler_q_shift = StepLR(self.optimizer_shift, step_size=self.step_size, gamma=0.9)
         self.scheduler_r = StepLR(self.optimizer_r, step_size=self.step_size, gamma=0.9)
@@ -105,7 +104,7 @@ class Agent():
         states = states.type(torch.float32).div_(255)
         states = self.encoder.create_vector(states) #.detach()
         self.state_action_frq(states, actions)
-        states, next_states, actions = memory_ex.sample(self.qnetwork_local, self.encoder)
+        states, next_states, actions , decrease_lr= memory_ex.sample(self.qnetwork_local, self.encoder, self.writer, self.steps)
         states = states.type(torch.float32).div_(255)
         states = self.encoder.create_vector(states)
         actions = torch.randint(0, 8, (self.batch_size,), dtype=torch.int64, device=self.device).unsqueeze(1)
@@ -118,12 +117,12 @@ class Agent():
         self.soft_update(self.R_local, self.R_target, self.tau)
         self.soft_update(self.q_shift_local, self.q_shift_target, self.tau)
         self.soft_update(self.qnetwork_local, self.qnetwork_target, self.tau)
-        if self.steps % 3 == 0:
+        if decrease_lr:
             self.scheduler_q.step()
             self.scheduler_q_shift.step()
             self.scheduler_r.step()
-        return
-            
+        q_lr = self.optimizer.param_groups[0]['lr']
+        self.writer.add_scalar('Q_learning_rate', q_lr, self.steps)    
     
     
     def compute_q_function(self, states, next_states, actions):
@@ -389,7 +388,7 @@ class Agent():
         error = True
         used_elements_r = 0
         used_elements_q = 0
-        for i in range(100):
+        for i in range(test_elements):
             states = memory.obses[i]
             actions = memory.actions[i]
             states = torch.as_tensor(states, device=self.device).unsqueeze(0)
@@ -420,6 +419,11 @@ class Agent():
         self.writer.add_scalar('KL_reward', average_r_kl, self.steps)
         """
         average_q_kl = q_error / used_elements_q 
+        if used_elements_q > (memory.idx * 0.8) and average_q_kl < 1:
+            memory.kl_threshold = average_q_kl
+            self.scheduler_q.step()
+            self.scheduler_q_shift.step()
+            self.scheduler_r.step()
         text = "Kl div of Q_values {} of {} elements".format(average_q_kl, used_elements_q)
         print(text)
         self.writer.add_scalar('KL_q_values', average_q_kl, self.steps)
@@ -443,19 +447,18 @@ class Agent():
 
 
 
-    def eval_policy(self, steps, args, dqn=False, recorde=False, eval_episodes=4):
-        env = gym.make("MontezumaRevenge-v0")
+    def eval_policy(self, steps, args, dqn=False, recorde=False, eval_episodes=5):
+        env = gym.make(self.env_name)
         env = FrameStack(env, args)
         if recorde:
             eval_episodes=1
             env = gym.wrappers.Monitor(env, self.path + "/vid/{}".format(steps), video_callable=lambda episode_id: True,force=True)
-        max_t = 500
         scores_window = []
         for i_episode in range(eval_episodes):
             episode_reward = 0
             env.seed(i_episode)
             state = env.reset()
-            for t in range(max_t):
+            while True:
                 if dqn:
                     action = self.act_dqn(state)
                 else:
@@ -466,138 +469,8 @@ class Agent():
                     break
             scores_window.append(episode_reward)
         if eval_episodes == 1:
+            self.writer.add_scalar('reward', episode_reward , steps)
             return
         eval_ave_reward = np.mean(scores_window)
         print("eval_reward ", eval_ave_reward)
         self.writer.add_scalar('eval_reward', eval_ave_reward , steps)
-        
-
-    def act_eps(self, states, eps):
-        states = torch.as_tensor(states, device=self.device).unsqueeze(0)
-        states = states.type(torch.float32).div_(255)
-        states = self.encoder.create_vector(states)
-        q_values = self.qnetwork_local(states.detach()).detach()
-        action = torch.argmax(q_values).item()
-        if random.random() > eps:
-            return action
-        else:
-            return random.choice(np.arange(self.action_size))
-
-
-    def fit_q(self, args, config, max_t=700, eps_start=1.0, eps_end=0.01, eps_decay=0.995, episodes=10000):
-        env = gym.make("MontezumaRevenge-v0")
-        env = FrameStack(env, args)
-        scores_window = []
-        env.seed(self.seed)
-        scores = []                        # list containing scores from each episode
-        scores_window = deque(maxlen=100)  # last 100 scores
-        eps = eps_start
-        path_model = "results/run-3/models/18500-"
-        self.load(path_model)
-        # transfer encoder
-        self.soft_update(self.encoder, self.encoder_dqn, 1)
-        memory =  ReplayBuffer((args.history_length, config["size"], config["size"]), (1,), config["expert_buffer_size"], config["image_pad"], config["device"])
-        self.steps = 0
-        for i_episode in range(episodes):
-            episode_reward = 0
-            state = env.reset()
-            for t in range(max_t):
-                self.steps  += 1 
-                action = self.act_eps(state, eps)
-                action_tensor = torch.from_numpy(np.array(action)).float().unsqueeze(0).to(self.device)
-                obs = torch.from_numpy(state).float().unsqueeze(0).to(self.device)
-                action_tensor = action_tensor.type(torch.int64)
-                vector_state = self.encoder.create_vector(obs.div_(255))
-                reward = self.R_local(vector_state).gather(1, action_tensor.unsqueeze(0))
-                next_state, _, done, _ = env.step(action)
-                memory.add(state, action, reward.item(), next_state, done, done)
-                state = next_state
-                if i_episode > 10:
-                    self.update_q(memory)
-                episode_reward += reward.item()
-                if done:
-                    break
-            scores_window.append(episode_reward)
-            eps = max(eps_end, eps_decay*eps) # decrease epsilon
-            eval_ave_reward = np.mean(scores_window)
-            if i_episode % 20 == 0:
-                print("create video")
-                self.eval_policy(i_episode, args, True, True)
-            print("Epsidoe {} Reward {} Av_reward {:.2f} eps {:.2f} ".format(i_episode, episode_reward, eval_ave_reward, eps))
-            self.writer.add_scalar('Eps_reward', episode_reward, i_episode)
-            self.writer.add_scalar('Ave_reward', eval_ave_reward, i_episode)
-
-    def update_q(self, memory):
-        states, actions, rewards, next_states, dones = memory.sample(self.batch_size)
-        states = states.type(torch.float32).div_(255)
-        states = self.encoder_dqn.create_vector(states).type(torch.long)
-        next_states = next_states.type(torch.float32).div_(255)
-        #next_states = self.encoder_dqn.create_vector(next_states).type(torch.long)
-        next_states = self.encoder_dqn.create_vector(next_states)
-        actions = actions.type(torch.int64)
-        with torch.no_grad():
-            # Get max predicted Q values (for next states) from target model
-            #local_actions = self.qnetwork_local(next_states.type(torch.long)).detach().max(1)[0]
-            local_actions = self.qnetwork_local(next_states).detach().max(1)[1]
-            local_actions = local_actions.type(torch.long).unsqueeze(1)
-            # print(local_actions)
-            #print(local_actions.type())
-            Q_targets_next = self.qnetwork_target(next_states).detach()
-            #print(Q_targets_next.shape)
-            Q_targets_next = Q_targets_next.gather(1, local_actions)
-            # Compute Q targets for current states
-            Q_targets = rewards + (self.gamma * Q_targets_next * dones)
-            
-            # Get expected Q values from local model
-        Q_expected = self.qnetwork_local(states.type(torch.float32)).gather(1, actions)
-        # Compute loss
-        loss = F.mse_loss(Q_expected, Q_targets)
-        # Minimize the loss
-        self.optimizer.zero_grad()
-        self.encoder_dqn_optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-        self.encoder_dqn_optimizer.step()
-        
-        self.writer.add_scalar('dqn_loss', loss , self.steps)
-        # ------------------- update target network ------------------- #
-        self.soft_update(self.qnetwork_local, self.qnetwork_target)
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

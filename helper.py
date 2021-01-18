@@ -1,24 +1,34 @@
-
-from collections import deque
-import numpy as np
+# Copyright 2020
+# Author: Christian Leininger <info2016frei@gmail.com>
 import cv2
+import os
 import torch
+from collections import deque
 from gym.spaces import Box
 from gym import Wrapper
+import numpy as np
 
+
+def mkdir(base, name):
+    """
+    Creates a direction if its not exist
+    Args:
+        param1(string): base first part of pathname
+        param2(string): name second part of pathname
+        Return: pathname
+    """
+    path = os.path.join(base, name)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
 
 
 class FrameStack(Wrapper):
-    r"""Observation wrapper that stacks the observations in a rolling manner.
-    For example, if the number of stacks is 4, then the returned observation contains
-    the most recent 4 observations. For environment 'Pendulum-v0', the original observation
-    is an array with shape [3], so if we stack 4 observations, the processed observation
-    has shape [4, 3].
-    .. note::
-        To be memory efficient, the stacked observations are wrapped by :class:`LazyFrame`.
-    .. note::
-        The observation space must be `Box` type. If one uses `Dict`
-        as observation space, it should apply `FlattenDictWrapper` at first.
+    """Observation wrapper that stacks the observations in a rolling manner.
+    For example, if the number of stacks is 4, then the returned observation
+    contains the most recent 4 observations. For environment 'Pendulum-v0,
+    the original observation is an array with shape [3], so if we stack
+    4 observations, the processed observation has shape [4, 3].
     Example::
         >>> import gym
         >>> env = gym.make('PongNoFrameskip-v0')
@@ -40,8 +50,7 @@ class FrameStack(Wrapper):
 
     def step(self, action):
         """
-
-        map the actions 
+        map the actions
         2 up  -> 0
         5 down -> 1
         3 right ->  2
@@ -51,20 +60,13 @@ class FrameStack(Wrapper):
 
         """
         if action == 0:
-            action = 2
+            action = 1
         elif action == 1:
-            action = 5
+            action = 2
         elif action == 2:
             action = 3
         elif action == 3:
             action = 4
-        elif action == 4:
-            action = 11
-        elif action == 5:
-            action = 12
-        elif action == 6:
-            action = 0
-
         observation, reward, done, info = self.env.step(action)
         state = self._create_next_obs(observation)
         return state, reward, done, info
@@ -73,10 +75,10 @@ class FrameStack(Wrapper):
         observation = self.env.reset(**kwargs)
         state = self._stacked_frames(observation)
         return state
-        
+
     def _create_next_obs(self, state):
-        state =  cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
-        state = cv2.resize(state,(self.size, self.size))
+        state = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
+        state = cv2.resize(state, (self.size, self.size))
         state = torch.tensor(state, dtype=torch.uint8, device=self.device)
         self.state_buffer.append(state)
         state = torch.stack(list(self.state_buffer), 0)
@@ -84,10 +86,9 @@ class FrameStack(Wrapper):
         obs = np.array(state)
         return obs
 
-
     def _stacked_frames(self, state):
-        state =  cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
-        state = cv2.resize(state,(self.size, self.size))
+        state = cv2.cvtColor(state, cv2.COLOR_BGR2GRAY)
+        state = cv2.resize(state, (self.size, self.size))
         state = torch.tensor(state, dtype=torch.uint8, device=self.device)
         zeros = torch.zeros_like(state)
         for idx in range(self.history_length - 1):
@@ -98,4 +99,3 @@ class FrameStack(Wrapper):
         state = state.cpu()
         obs = np.array(state)
         return obs
-
